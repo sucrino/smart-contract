@@ -2,7 +2,7 @@
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
 #
-# Main Smart Contract of Sucrino Protocol
+# Main Smart Contract of Sucrino Stablecoin
 # Implemented actions: Swap, Bond Liquidation, Leasing
 #
 
