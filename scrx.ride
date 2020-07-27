@@ -1,0 +1,318 @@
+{-# STDLIB_VERSION 3 #-}
+{-# CONTENT_TYPE DAPP #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+#
+# Main Smart Contract of Sucrino Protocol
+# Implemented actions: Swap, Bond Liquidation, Leasing
+#
+
+#-------------------Base functions----------------------
+func getNumberByKey(key: String) = {
+    match getInteger(this, key) {
+            case a:Int => a
+            case _ => 0
+    }
+}
+func getStringByKey(key: String) = {
+    match getString(this, key) {
+            case a:String => a
+            case _ => ""
+    }
+}
+func getBoolByKey(key: String) = {
+    match getBoolean(this, key) {
+            case a:Boolean => a
+            case _ => false
+    }
+}
+func getNumberByAddressAndKey(address: String, key: String) = {
+    match getInteger(addressFromStringValue(address), key) {
+            case a:Int => a
+            case _ => 0
+    }
+}
+func getStringByAddressAndKey(address: String, key: String) = {
+     match getString(addressFromStringValue(address), key) {
+            case a:String => a
+            case _ => ""
+    }
+}
+func getBoolByAddressAndKey(address: String, key: String) = {
+     match getBoolean(addressFromStringValue(address), key) {
+            case a:Boolean => a
+            case _ => false
+    }
+}
+
+let pubKeyAdminsList = [
+    "#",	
+    "#",	
+    "#",	
+    "#"	
+]
+
+#-------------------Constants---------------------------
+let SENDTXEXPIRE = 30
+let LISTSPLITSYMBOL = "_"
+let LISTDATASYMBOL = "+"
+let WAVELET = 100000000
+let PAULI = 1000000
+
+#-------------------Constructor-------------------------
+let sucrinoAssetIdKey = "sucrino_asset_id"
+let BondAssetIdKey = "bond_asset_id"
+let AuctionContractKey = "auction_contract"
+let LiquidationContractKey = "liquidation_contract"
+let RPDContractKey = "rpd_contract"
+let ContolContractKey = "control_contract"
+let BalanceWavesLockIntervalKey = "balance_waves_lock_interval"
+let BalanceSucrinoLockIntervalKey = "balance_sucrino_lock_interval"
+let MinWavesSwapAmountKey = "min_waves_swap_amount"
+let MinSucrinoSwapAmountKey = "min_sucrino_swap_amount"
+let NodeOracleProviderPubKeyKey = "node_oracle_provider"
+
+#------Common----------------
+let RPDBalanceKey = "rpd_balance"
+#------RPD contract----------
+func getRPDContractBalanceKey(assetId: ByteVector) = RPDBalanceKey + "_" + toBase58String(assetId)
+#------Control contract-------
+let PriceKey = "price"
+let PriceIndexKey = "price_index"
+let IsBlockedKey = "is_blocked"
+func getPriceHistoryKey(block: Int) = PriceKey + "_" + toString(block)
+func getHeightPriceByIndexKey(index: Int) = PriceIndexKey + "_" + toString(index)
+#------This contract----------
+let BalanceLockedkKey = "balance_lock_"
+let WavesLockedBalanceKey = BalanceLockedkKey + "waves"
+let SucrinoLockedBalanceKey = BalanceLockedkKey + "sucrino"
+
+func getRPDSnapshotContractBalanceKey(count: Int, assetId: ByteVector) = RPDBalanceKey + "_" + toBase58String(assetId) + "_" + toString(count)
+func getCancelLeaseTxReserveFeeKey(hash: String) = "cancel_lease_tx_reserve_fee" + "_" + hash
+func getWavesLockedBalanceKey(owner: String) = WavesLockedBalanceKey + "_" + owner
+func getSucrinoLockedBalanceKey(owner: String) = SucrinoLockedBalanceKey + "_" + owner
+func getBalanceUnlockBlockKey(owner: String) = "balance_unlock_block_" + owner
+func getRPDProfitKey(count: Int) = "rpd_profit" + "_" + toString(count)
+
+#-------------------Convert functions-------------------
+func convertSucrinoToWaves(amount: Int, price: Int) = fraction(fraction(amount, 100, price),WAVELET, PAULI)
+func convertWavesToSucrino(amount: Int, price: Int) = fraction(fraction(amount, price, 100), PAULI, WAVELET)
+func convertWavesToBond(amount: Int, price: Int) = convertWavesToSucrino(amount, price) # it's here to be more explicit with convertation
+func convertJsonArrayToList(jsonArray: String) = {
+   jsonArray.split(",") #jsonArray.take(size(jsonArray)-1).drop(1).split(",")
+}
+
+#-------------------Global vars-------------------------
+
+let liquidationContract = getStringByKey(LiquidationContractKey)
+let SucrinoAssetIdString = getStringByKey(sucrinoAssetIdKey)
+let sucrinoAssetId = fromBase58String(SucrinoAssetIdString)
+let auctionContract = getStringByKey(AuctionContractKey)
+let rpdContract = getStringByKey(RPDContractKey)
+let controlContract = getStringByKey(ContolContractKey)
+let priceIndex = getNumberByAddressAndKey(controlContract, PriceIndexKey) # Last price history iterator from control.ride
+let isBlocked = getBoolByAddressAndKey(controlContract,IsBlockedKey) # Checks for contract locks that might happen after attacks.  The var is read from control contract
+let nodeOracleProviderPubKey = fromBase58String(getStringByKey(NodeOracleProviderPubKeyKey))
+let balanceWavesLockInterval = getNumberByKey(BalanceWavesLockIntervalKey)
+let balanceSucrinoLockInterval = getNumberByKey(BalanceSucrinoLockIntervalKey)
+let minWavesSwapAmount = getNumberByKey(MinWavesSwapAmountKey)
+let minSucrinoSwapAmount = getNumberByKey(MinSucrinoSwapAmountKey)
+let bondAssetId = fromBase58String("") # NSBT with 6 decimals as USDN does
+let deprecatedBondAssetId = fromBase58String("") # USDNB with 0 decimals
+
+let sucrinoContract = this
+#-------------------Global vars deficit, locked & supply -------------------------
+let currentPrice = getNumberByAddressAndKey(controlContract, PriceKey) # The value from control.ride
+let sucrinoLockedBalance = getNumberByKey(SucrinoLockedBalanceKey) #locked balance from USDN -> WAVES swap
+let wavesLockedBalance = getNumberByKey(WavesLockedBalanceKey) #locked balance from WAVES -> USDN swap
+let reserve = wavesBalance(sucrinoContract) - wavesLockedBalance #waves reserves to cover USDN supply
+let sucrinoSupply = sucrinoLockedBalance + extract(assetInfo(sucrinoAssetId)).quantity - assetBalance(sucrinoContract, sucrinoAssetId) 
+    - assetBalance(addressFromStringValue(liquidationContract), sucrinoAssetId) # supply outside main sc or liquidation contract
+let surplus = convertWavesToSucrino(reserve, currentPrice) - sucrinoSupply
+let deficit = sucrinoSupply - convertWavesToSucrino(reserve, currentPrice)
+
+
+#-------------------Verifier Functions----------------------
+func checkIsValidMinSponsoredFee(tx: SponsorFeeTransaction) = {
+    let MINTRANSFERFEE = 100000 #wavelets (to support smart assets)
+    let SponsoredFeeUpperBound = 1000 # % of fee profits higther than real fee for transfer
+    let realSucrinoFee = convertWavesToSucrino(MINTRANSFERFEE, currentPrice) # in paulis
+    let minSucrinoFee = realSucrinoFee * 2 # 100%
+    let maxSucrinoFee = fraction(realSucrinoFee, SponsoredFeeUpperBound, 100)
+
+    let inputFee = extract(tx.minSponsoredAssetFee)
+
+    inputFee >= minSucrinoFee && inputFee <= maxSucrinoFee && tx.assetId == sucrinoAssetId
+}
+
+#-------------------Get functions----------------------
+#------RPD contract---------
+# The func is reading balances from rpd.ride
+func getRPDContractBalance(assetId: ByteVector) = getNumberByAddressAndKey(rpdContract, getRPDContractBalanceKey(assetId))
+#------Control contract------
+# The func is reading price from control.ride price history
+func getPriceHistory(block: Int) = getNumberByAddressAndKey(controlContract, getPriceHistoryKey(block))
+# The func is reading from control.ride price history heights
+func getHeightPriceByIndex(index: Int) = getNumberByAddressAndKey(controlContract, getHeightPriceByIndexKey(index))
+#------This contract---------
+func getCancelLeaseTxReserveFee(hash: String) = getNumberByKey(getCancelLeaseTxReserveFeeKey(hash))
+func getWavesLockedBalance(owner: String) =  getNumberByKey(getWavesLockedBalanceKey(owner))
+func getSucrinoLockedBalance(owner: String) =  getNumberByKey(getSucrinoLockedBalanceKey(owner))
+func getUnlockBalanceBlock(owner : String) = getNumberByKey(getBalanceUnlockBlockKey(owner))
+func getRPDProfit(count: Int) = getNumberByKey(getRPDProfitKey(count))
+#-------------------Callable----------------------
+
+# Instant swap of WAVES to Sucrino token at the current price on the smart contract
+# [called by user]
+@Callable(i)
+func swapWavesToSucrino() = {
+    let pmt = extract(i.payment)
+    let account = toString(i.caller)
+    
+    if (pmt.amount < minWavesSwapAmount)
+        then throw("The specified Waves amount is less than the required minimum of " + toString(minWavesSwapAmount) + " wavelets.")
+    else if (isDefined(pmt.assetId))
+        then throw("Only Waves token is allowed for swapping.")
+    else if(isBlocked)
+        then throw("contract is blocked by EMERGENCY SHUTDOWN actions untill reactivation by emergency oracles") # see control.ride
+    else if(getUnlockBalanceBlock(account) > height)
+        then throw("await " + toString(getUnlockBalanceBlock(account) - height) + " blocks")
+    else if (getSucrinoLockedBalance(account) != 0 || getWavesLockedBalance(account) != 0)
+        then throw("please withdraw locked funds first")
+    else {
+        WriteSet([
+            DataEntry(getWavesLockedBalanceKey(account), pmt.amount),
+            DataEntry(getBalanceUnlockBlockKey(account), height + balanceWavesLockInterval),
+            DataEntry(WavesLockedBalanceKey, wavesLockedBalance + pmt.amount)
+        ])
+    }
+}
+
+# Swap request of Sucrino to WAVES. After {balanceLockInterval} blocks, WAVES tokens will be available for withdrawal
+# via {withdraw(account : String)} method at the price that is current at the time when {balanceLockInterval} is reached
+# [called by user]
+@Callable(i)
+func swapSucrinoToWaves() = {
+    let pmt = extract(i.payment)
+    let account = toString(i.caller)
+    if (pmt.amount < minSucrinoSwapAmount)
+        then throw("The specified Sucrino amount is less than the required minimum of " + toString(minSucrinoSwapAmount) + " Sucrino cents.")
+    else if(isBlocked)
+        then throw("The contract is blocked by EMERGENCY SHUTDOWN. Please wait for reactivation by emergency oracles.") # see control.ride
+    else if (pmt.assetId != sucrinoAssetId)
+        then throw("Only appropriate Sucrino tokens are allowed for swapping.")
+    else if(getUnlockBalanceBlock(account) > height)
+        then throw("await " + toString(getUnlockBalanceBlock(account) - height) + " blocks")
+    else if (getSucrinoLockedBalance(account) != 0 || getWavesLockedBalance(account) != 0)
+        then throw("please withdraw locked funds first")
+    else {
+        WriteSet([
+            DataEntry(getSucrinoLockedBalanceKey(account), pmt.amount),
+            DataEntry(getBalanceUnlockBlockKey(account), height + balanceSucrinoLockInterval),
+            DataEntry(SucrinoLockedBalanceKey, sucrinoLockedBalance + pmt.amount)
+        ])
+    }
+}
+
+# Withdraw WAVES from smart contract after {swapSucrinoToWaves()} request has reached {balanceLockInterval} height
+# at the price that is current at the time when {balanceLockInterval} is reached
+# [called by user]
+@Callable(i)
+func withdraw(account : String, index: Int) = {
+    let unlockHeight = getUnlockBalanceBlock(account)
+    let userWavesLockedBalance = getWavesLockedBalance(account)
+    let userSucrinoLockedBalance = getSucrinoLockedBalance(account)
+
+    let indexHeight = getHeightPriceByIndex(index)
+    let prevIndexHeight = getHeightPriceByIndex(index-1)
+    let priceByIndex = getPriceHistory(indexHeight)
+
+    let spread = if (priceByIndex < 100) then 1 else priceByIndex / 100
+    let sucrinoAmount = convertWavesToSucrino(userWavesLockedBalance, priceByIndex - spread)
+    let wavesAmount = convertSucrinoToWaves(userSucrinoLockedBalance, priceByIndex + spread)
+            
+    if(isBlocked)
+        then throw("contract is blocked by EMERGENCY SHUTDOWN actions untill reactivation by emergency oracles") # see control.ride
+    else if(unlockHeight > height)
+        then throw("please wait for: " + toString(unlockHeight) + " block height to withdraw WAVES funds")
+    else if(index > priceIndex  || indexHeight < unlockHeight || (prevIndexHeight != 0 && unlockHeight <= prevIndexHeight))
+        then throw("invalid price history index: index=" + toString(index)
+                + " priceIndex=" + toString(priceIndex)
+                + " indexHeight=" + toString(indexHeight)
+                + " unlockHeight=" + toString(unlockHeight)
+                + " prevIndexHeight=" + toString(prevIndexHeight))
+    else if(sucrinoAmount <= 0 && wavesAmount <= 0)
+        then throw("balance equals zero")
+    else {   
+        ScriptResult(
+            WriteSet([
+                DataEntry(getWavesLockedBalanceKey(account), 0),
+                DataEntry(getSucrinoLockedBalanceKey(account), 0),
+
+                DataEntry(WavesLockedBalanceKey, wavesLockedBalance - userWavesLockedBalance),
+                DataEntry(SucrinoLockedBalanceKey, sucrinoLockedBalance - userSucrinoLockedBalance)
+            ]),
+            TransferSet([
+                ScriptTransfer(addressFromStringValue(account), wavesAmount, unit),
+                ScriptTransfer(addressFromStringValue(account), sucrinoAmount, sucrinoAssetId)
+            ])
+        )
+    }
+}
+
+# Transfers bonds from sucrino.ride to auction.ride to fulfill 'buy bonds' orders
+# Is called n-times until all pending orders on auction.ride are fulfilled or to keep NB reserves equal to total USDN supply
+# [called by pacemaker oracles]
+@Callable(i)
+func transferToAuction() = {
+    let auctionNBAmount = sucrinoSupply - assetBalance(addressFromStringValue(auctionContract), bondAssetId)
+    let surplusWithLiquidation = (surplus - assetBalance(addressFromStringValue(liquidationContract), sucrinoAssetId)) #in 6 decimals
+    if(isBlocked)
+        then throw("contract is blocked by EMERGENCY SHUTDOWN actions untill reactivation by emergency oracles") # see control.ride
+    else if(auctionNBAmount > 1*PAULI)
+        then TransferSet([ScriptTransfer(addressFromStringValue(auctionContract), auctionNBAmount, bondAssetId)])
+    else if(surplusWithLiquidation >= 1*PAULI)
+        then TransferSet([ScriptTransfer(addressFromStringValue(liquidationContract), surplusWithLiquidation, sucrinoAssetId)])
+    else 
+        throw("bond were generated or do not need it. Deficit:" + toString(auctionNBAmount) + "|" + toString(0) + ". Surplus:" + toString(surplusWithLiquidation) + "|" + toString(surplus))
+}
+
+# Transfers tokens from one address to another via smart contact
+# [called by user]
+@Callable(i)
+func transfer(account: String) = {
+    let pmt = extract(i.payment)
+    TransferSet([ScriptTransfer(addressFromStringValue(account), pmt.amount, pmt.assetId)])
+}
+
+
+# USDNB (0 decimals) to NSBT (6 decimals) liquidation orders migration method (temporary method)
+# [called by user]
+@Callable(i)
+func migrationUSDNB2NSBTSwap() = {
+    let pmt = extract(i.payment)
+    let account = i.caller
+    if (deprecatedBondAssetId != pmt.assetId)
+        then throw("error: attempt to swap not USDNB tokens")
+    else TransferSet([ScriptTransfer(account, pmt.amount*PAULI, bondAssetId)])
+}
+
+# LeaseCancelTransaction depends from swapSucrinoToWaves() result i.e. waves amount is not enought for future swaps
+# or end of leasing time
+@Verifier(tx)
+ func verify() = {
+    let id = toBase58String(tx.id)
+    let count =	
+        (if(sigVerify(tx.bodyBytes, tx.proofs[0], fromBase58String(pubKeyAdminsList[0]))) then 1 else 0) +	
+        (if(sigVerify(tx.bodyBytes, tx.proofs[1], fromBase58String(pubKeyAdminsList[1]))) then 1 else 0) +	
+        (if(sigVerify(tx.bodyBytes, tx.proofs[2], fromBase58String(pubKeyAdminsList[2]))) then 1 else 0) +	
+        (if(sigVerify(tx.bodyBytes, tx.proofs[3], fromBase58String(pubKeyAdminsList[3]))) then 2 else 0)
+    match tx {
+        case leasingTx: LeaseTransaction | LeaseCancelTransaction =>
+            sigVerify(tx.bodyBytes, tx.proofs[0], nodeOracleProviderPubKey)
+        case sponsorTx: SponsorFeeTransaction =>
+            checkIsValidMinSponsoredFee(sponsorTx) && count >= 3
+        case _ => {	
+            count >= 3
+        }
+    }
+}
