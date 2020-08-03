@@ -1,0 +1,344 @@
+{-# STDLIB_VERSION 3 #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+{-# CONTENT_TYPE DAPP #-}
+func getNumberByKey (key) = match getInteger(this, key) {
+    case a: Int => 
+        a
+    case _ => 
+        0
+}
+
+
+func getStringByKey (key) = match getString(this, key) {
+    case a: String => 
+        a
+    case _ => 
+        ""
+}
+
+
+func getBoolByKey (key) = match getBoolean(this, key) {
+    case a: Boolean => 
+        a
+    case _ => 
+        false
+}
+
+
+func getNumberByAddressAndKey (address,key) = match getInteger(addressFromStringValue(address), key) {
+    case a: Int => 
+        a
+    case _ => 
+        0
+}
+
+
+func getStringByAddressAndKey (address,key) = match getString(addressFromStringValue(address), key) {
+    case a: String => 
+        a
+    case _ => 
+        ""
+}
+
+
+func getBoolByAddressAndKey (address,key) = match getBoolean(addressFromStringValue(address), key) {
+    case a: Boolean => 
+        a
+    case _ => 
+        false
+}
+
+
+let pubKeyAdminsList = ["#", "#", "#", "#"]
+
+let SENDTXEXPIRE = 30
+
+let LISTSPLITSYMBOL = "_"
+
+let LISTDATASYMBOL = "+"
+
+let WAVELET = 100000000
+
+let PAULI = 1000000
+
+let PRICELET = 1000000
+
+let SucrinoAssetIdKey = "sucrino_asset_id"
+
+let BondAssetIdKey = "bond_asset_id"
+
+let AuctionContractKey = "auction_contract"
+
+let LiquidationContractKey = "liquidation_contract"
+
+let RPDContractKey = "rpd_contract"
+
+let ContolContractKey = "control_contract"
+
+let BalanceSucreLockIntervalKey = "balance_sucre_lock_interval"
+
+let BalanceSucrinoLockIntervalKey = "balance_sucrino_lock_interval"
+
+let MinSucreSwapAmountKey = "min_sucre_swap_amount"
+
+let MinSucrinoSwapAmountKey = "min_sucrino_swap_amount"
+
+let NodeOracleProviderPubKeyKey = "node_oracle_provider"
+
+let RPDBalanceKey = "rpd_balance"
+
+func getRPDContractBalanceKey (assetId) = ((RPDBalanceKey + "_") + toBase58String(assetId))
+
+
+let PriceKey = "price"
+
+let PriceIndexKey = "price_index"
+
+let IsBlockedKey = "is_blocked"
+
+func getPriceHistoryKey (block) = ((PriceKey + "_") + toString(block))
+
+
+func getHeightPriceByIndexKey (index) = ((PriceIndexKey + "_") + toString(index))
+
+
+let BalanceLockedkKey = "balance_lock_"
+
+let SucreLockedBalanceKey = (BalanceLockedkKey + "sucre")
+
+let SucrinoLockedBalanceKey = (BalanceLockedkKey + "sucrino")
+
+func getRPDSnapshotContractBalanceKey (count,assetId) = ((((RPDBalanceKey + "_") + toBase58String(assetId)) + "_") + toString(count))
+
+
+func getCancelLeaseTxReserveFeeKey (hash) = (("cancel_lease_tx_reserve_fee" + "_") + hash)
+
+
+func getSucreLockedBalanceKey (owner) = ((SucreLockedBalanceKey + "_") + owner)
+
+
+func getSucrinoLockedBalanceKey (owner) = ((SucrinoLockedBalanceKey + "_") + owner)
+
+
+func getBalanceUnlockBlockKey (owner) = ("balance_unlock_block_" + owner)
+
+
+func getRPDProfitKey (count) = (("rpd_profit" + "_") + toString(count))
+
+
+func convertSucrinoToSucre (amount,price) = fraction(fraction(amount, PRICELET, price), WAVELET, PAULI)
+
+
+func convertSucreToSucrino (amount,price) = fraction(fraction(amount, price, PRICELET), PAULI, WAVELET)
+
+
+func convertSucreToBond (amount,price) = convertSucreToSucrino(amount, price)
+
+
+func convertJsonArrayToList (jsonArray) = split(jsonArray, ",")
+
+
+let liquidationContract = getStringByKey(LiquidationContractKey)
+
+let sucrinoAssetIdString = getStringByKey(SucrinoAssetIdKey)
+
+let sucrinoAssetId = fromBase58String(sucrinoAssetIdString)
+
+let auctionContract = getStringByKey(AuctionContractKey)
+
+let rpdContract = getStringByKey(RPDContractKey)
+
+let controlContract = getStringByKey(ContolContractKey)
+
+let priceIndex = getNumberByAddressAndKey(controlContract, PriceIndexKey)
+
+let isBlocked = getBoolByAddressAndKey(controlContract, IsBlockedKey)
+
+let nodeOracleProviderPubKey = fromBase58String(getStringByKey(NodeOracleProviderPubKeyKey))
+
+let balanceSucreLockInterval = getNumberByKey(BalanceSucreLockIntervalKey)
+
+let balanceSucrinoLockInterval = getNumberByKey(BalanceSucrinoLockIntervalKey)
+
+let minSucreSwapAmount = getNumberByKey(MinSucreSwapAmountKey)
+
+let minSucrinoSwapAmount = getNumberByKey(MinSucrinoSwapAmountKey)
+
+let bondAssetId = fromBase58String("#")
+
+let deprecatedBondAssetId = fromBase58String("#")
+
+let sucrinoContract = this
+
+let currentPrice = getNumberByAddressAndKey(controlContract, PriceKey)
+
+let sucrinoLockedBalance = getNumberByKey(SucrinoLockedBalanceKey)
+
+let sucreLockedBalance = getNumberByKey(SucreLockedBalanceKey)
+
+let reserve = (sucreBalance(sucrinoContract) - sucreLockedBalance)
+
+let sucrinoSupply = (((sucrinoLockedBalance + extract(assetInfo(sucrinoAssetId)).quantity) - assetBalance(sucrinoContract, sucrinoAssetId)) - assetBalance(addressFromStringValue(liquidationContract), sucrinoAssetId))
+
+let surplus = (convertSucreToSucrino(reserve, currentPrice) - sucrinoSupply)
+
+let deficit = (sucrinoSupply - convertSucreToSucrino(reserve, currentPrice))
+
+func checkIsValidMinSponsoredFee (tx) = {
+    let MINTRANSFERFEE = 100000
+    let SponsoredFeeUpperBound = 1000
+    let realSucrinoFee = convertSucreToSucrino(MINTRANSFERFEE, currentPrice)
+    let minSucrinoFee = (realSucrinoFee * 2)
+    let maxSucrinoFee = fraction(realSucrinoFee, SponsoredFeeUpperBound, 100)
+    let inputFee = extract(tx.minSponsoredAssetFee)
+    if (if ((inputFee >= minSucrinoFee))
+        then (maxSucrinoFee >= inputFee)
+        else false)
+        then (tx.assetId == sucrinoAssetId)
+        else false
+    }
+
+
+func getRPDContractBalance (assetId) = getNumberByAddressAndKey(rpdContract, getRPDContractBalanceKey(assetId))
+
+
+func getPriceHistory (block) = getNumberByAddressAndKey(controlContract, getPriceHistoryKey(block))
+
+
+func getHeightPriceByIndex (index) = getNumberByAddressAndKey(controlContract, getHeightPriceByIndexKey(index))
+
+
+func getCancelLeaseTxReserveFee (hash) = getNumberByKey(getCancelLeaseTxReserveFeeKey(hash))
+
+
+func getSucreLockedBalance (owner) = getNumberByKey(getSucreLockedBalanceKey(owner))
+
+
+func getSucrinoLockedBalance (owner) = getNumberByKey(getSucrinoLockedBalanceKey(owner))
+
+
+func getUnlockBalanceBlock (owner) = getNumberByKey(getBalanceUnlockBlockKey(owner))
+
+
+func getRPDProfit (count) = getNumberByKey(getRPDProfitKey(count))
+
+
+@Callable(i)
+func swapSucreToSucrino () = {
+    let pmt = extract(i.payment)
+    let account = toString(i.caller)
+    if ((minSucreSwapAmount > pmt.amount))
+        then throw((("The specified Sucre amount is less than the required minimum of " + toString(minSucreSwapAmount)) + " wavelets."))
+        else if (isDefined(pmt.assetId))
+            then throw("Only Sucre token is allowed for swapping.")
+            else if (isBlocked)
+                then throw("contract is blocked by EMERGENCY SHUTDOWN actions untill reactivation by emergency oracles")
+                else if ((getUnlockBalanceBlock(account) > height))
+                    then throw((("await " + toString((getUnlockBalanceBlock(account) - height))) + " blocks"))
+                    else if (if (!=(getSucrinoLockedBalance(account), 0))
+                        then true
+                        else !=(getSucreLockedBalance(account), 0))
+                        then throw("please withdraw locked funds first")
+                        else WriteSet([DataEntry(getSucreLockedBalanceKey(account), pmt.amount), DataEntry(getBalanceUnlockBlockKey(account), (height + balanceSucreLockInterval)), DataEntry(SucreLockedBalanceKey, (sucreLockedBalance + pmt.amount))])
+    }
+
+
+
+@Callable(i)
+func swapSucrinoToSucre () = {
+    let pmt = extract(i.payment)
+    let account = toString(i.caller)
+    if ((minSucrinoSwapAmount > pmt.amount))
+        then throw((("The specified Sucrino amount is less than the required minimum of " + toString(minSucrinoSwapAmount)) + " Sucrino cents."))
+        else if (isBlocked)
+            then throw("The contract is blocked by EMERGENCY SHUTDOWN. Please wait for reactivation by emergency oracles.")
+            else if (!=(pmt.assetId, sucrinoAssetId))
+                then throw("Only appropriate Sucrino tokens are allowed for swapping.")
+                else if ((getUnlockBalanceBlock(account) > height))
+                    then throw((("await " + toString((getUnlockBalanceBlock(account) - height))) + " blocks"))
+                    else if (if (!=(getSucrinoLockedBalance(account), 0))
+                        then true
+                        else !=(getSucreLockedBalance(account), 0))
+                        then throw("please withdraw locked funds first")
+                        else WriteSet([DataEntry(getSucrinoLockedBalanceKey(account), pmt.amount), DataEntry(getBalanceUnlockBlockKey(account), (height + balanceSucrinoLockInterval)), DataEntry(SucrinoLockedBalanceKey, (sucrinoLockedBalance + pmt.amount))])
+    }
+
+
+
+@Callable(i)
+func withdraw (account,index) = {
+    let unlockHeight = getUnlockBalanceBlock(account)
+    let userSucreLockedBalance = getSucreLockedBalance(account)
+    let userSucrinoLockedBalance = getSucrinoLockedBalance(account)
+    let indexHeight = getHeightPriceByIndex(index)
+    let prevIndexHeight = getHeightPriceByIndex((index - 1))
+    let priceByIndex = getPriceHistory(indexHeight)
+    let spread = 0
+    let sucrinoAmount = convertSucreToSucrino(userSucreLockedBalance, (priceByIndex - spread))
+    let sucreAmount = convertSucrinoToSucre(userSucrinoLockedBalance, (priceByIndex + spread))
+    if (isBlocked)
+        then throw("contract is blocked by EMERGENCY SHUTDOWN actions untill reactivation by emergency oracles")
+        else if ((unlockHeight > height))
+            then throw((("please wait for: " + toString(unlockHeight)) + " block height to withdraw Sucre funds"))
+            else if (if (if ((index > priceIndex))
+                then true
+                else (unlockHeight > indexHeight))
+                then true
+                else if (!=(prevIndexHeight, 0))
+                    then (prevIndexHeight >= unlockHeight)
+                    else false)
+                then throw(((((((((("invalid price history index: index=" + toString(index)) + " priceIndex=") + toString(priceIndex)) + " indexHeight=") + toString(indexHeight)) + " unlockHeight=") + toString(unlockHeight)) + " prevIndexHeight=") + toString(prevIndexHeight)))
+                else if (if ((0 >= sucrinoAmount))
+                    then (0 >= sucreAmount)
+                    else false)
+                    then throw("balance equals zero")
+                    else ScriptResult(WriteSet([DataEntry(getSucreLockedBalanceKey(account), 0), DataEntry(getSucrinoLockedBalanceKey(account), 0), DataEntry(SucreLockedBalanceKey, (sucreLockedBalance - userSucreLockedBalance)), DataEntry(SucrinoLockedBalanceKey, (sucrinoLockedBalance - userSucrinoLockedBalance))]), TransferSet([ScriptTransfer(addressFromStringValue(account), sucreAmount, unit), ScriptTransfer(addressFromStringValue(account), sucrinoAmount, sucrinoAssetId)]))
+    }
+
+
+
+@Callable(i)
+func transferToAuction () = {
+    let auctionNBAmount = (sucrinoSupply - assetBalance(addressFromStringValue(auctionContract), bondAssetId))
+    let surplusWithLiquidation = (surplus - assetBalance(addressFromStringValue(liquidationContract), sucrinoAssetId))
+    if (isBlocked)
+        then throw("contract is blocked by EMERGENCY SHUTDOWN actions untill reactivation by emergency oracles")
+        else if ((auctionNBAmount > (1 * PAULI)))
+            then TransferSet([ScriptTransfer(addressFromStringValue(auctionContract), auctionNBAmount, bondAssetId)])
+            else if ((surplusWithLiquidation >= (1 * PAULI)))
+                then TransferSet([ScriptTransfer(addressFromStringValue(liquidationContract), surplusWithLiquidation, sucrinoAssetId)])
+                else throw(((((((("bond were generated or do not need it. Deficit:" + toString(auctionNBAmount)) + "|") + toString(0)) + ". Surplus:") + toString(surplusWithLiquidation)) + "|") + toString(surplus)))
+    }
+
+
+
+@Callable(i)
+func transfer (account) = {
+    let pmt = extract(i.payment)
+    TransferSet([ScriptTransfer(addressFromStringValue(account), pmt.amount, pmt.assetId)])
+    }
+
+
+@Verifier(tx)
+func verify () = {
+    let id = toBase58String(tx.id)
+    let count = (((if (sigVerify(tx.bodyBytes, tx.proofs[0], fromBase58String(pubKeyAdminsList[0])))
+        then 1
+        else 0 + if (sigVerify(tx.bodyBytes, tx.proofs[1], fromBase58String(pubKeyAdminsList[1])))
+        then 1
+        else 0) + if (sigVerify(tx.bodyBytes, tx.proofs[2], fromBase58String(pubKeyAdminsList[2])))
+        then 1
+        else 0) + if (sigVerify(tx.bodyBytes, tx.proofs[3], fromBase58String(pubKeyAdminsList[3])))
+        then 2
+        else 0)
+    match tx {
+        case leasingTx: LeaseCancelTransaction|LeaseTransaction => 
+            sigVerify(leasingTx.bodyBytes, leasingTx.proofs[0], nodeOracleProviderPubKey)
+        case sponsorTx: SponsorFeeTransaction => 
+            if (checkIsValidMinSponsoredFee(sponsorTx))
+                then (count >= 3)
+                else false
+        case _ => 
+            (count >= 3)
+    }
+    }
